@@ -6,8 +6,9 @@ const config = getDefaultConfig(__dirname);
 config.watchFolders = config.watchFolders || [];
 config.resolver = config.resolver || {};
 config.resolver.blockList = [
-  /node_modules\/.expo-.*\/android\/.*/,
+  /node_modules\/.expo-.*\/.*/,
   /node_modules\/.*\/android\/build\/.*/,
+  /node_modules\/.*\/build\/kotlin\/.*/,
 ];
 
 module.exports = config;

@@ -401,6 +401,17 @@ class HIDKeyboardModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    fun getPreference(key: String, promise: Promise) {
+        promise.resolve(prefs.getString(key, null))
+    }
+
+    @ReactMethod
+    fun setPreference(key: String, value: String, promise: Promise) {
+        prefs.edit().putString(key, value).apply()
+        promise.resolve(true)
+    }
+
+    @ReactMethod
     fun addListener(eventName: String) {}
 
     @ReactMethod

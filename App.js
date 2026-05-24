@@ -12,6 +12,7 @@ import {
   Platform,
   ActivityIndicator,
   Modal,
+  Switch,
 } from 'react-native';
 import NfcManager, { NfcTech } from 'react-native-nfc-manager';
 import { BarCodeScanner } from 'expo-barcode-scanner';
@@ -116,6 +117,10 @@ export default function App() {
 
   const sendStatusTimer = useRef(null);
 
+  // Settings
+  const [showSettings, setShowSettings] = useState(false);
+  const [appendEnter, setAppendEnter] = useState(false);
+
   // Barcode / QR
   const [bcScanning, setBcScanning] = useState(false);
   const [bcData, setBcData] = useState(null);
@@ -135,10 +140,23 @@ export default function App() {
 
     initBluetooth();
 
+    if (HIDKeyboardModule?.getPreference) {
+      HIDKeyboardModule.getPreference('appendEnter')
+        .then(v => { if (v === 'true') setAppendEnter(true); })
+        .catch(() => {});
+    }
+
     return () => {
       NfcManager.cancelTechnologyRequest().catch(() => {});
     };
   }, []);
+
+  function toggleAppendEnter(value) {
+    setAppendEnter(value);
+    if (HIDKeyboardModule?.setPreference) {
+      HIDKeyboardModule.setPreference('appendEnter', String(value)).catch(() => {});
+    }
+  }
 
   async function initBluetooth() {
     setBtError('');
@@ -181,7 +199,7 @@ export default function App() {
         setBtConnected(false);
         setConnecting(false);
         setReconnectFailed(true);
-        setBtError('No se pudo reconectar. Usá "Forzar reconexión" o volvé a emparejar.');
+        setBtError('Could not reconnect. Use "Force reconnect" or re-pair the device.');
       } else {
         setBtConnected(false);
         setConnecting(false);
@@ -239,11 +257,11 @@ export default function App() {
       await HIDKeyboardModule.forceReconnect();
       connectTimeoutRef.current = setTimeout(() => {
         setConnecting(false);
-        setBtError('Sin respuesta. Si el problema persiste, volvé a emparejar desde cero.');
+        setBtError('No response. If the issue persists, re-pair the device from scratch.');
       }, 15000);
     } catch (e) {
       setConnecting(false);
-      setBtError(e?.message || 'Error al forzar reconexión');
+      setBtError(e?.message || 'Force reconnect failed');
     }
   }
 
@@ -256,7 +274,7 @@ export default function App() {
     setBcSentText('');
     const { status } = await BarCodeScanner.requestPermissionsAsync();
     if (status !== 'granted') {
-      setBcError('Permiso de cámara denegado. Habilitalo en Configuración.');
+      setBcError('Camera permission denied. Enable it in Settings.');
       return;
     }
     bcScannedRef.current = false;
@@ -278,7 +296,7 @@ export default function App() {
     setBcSentText(text);
     clearTimeout(bcSendStatusTimer.current);
     try {
-      await HIDKeyboardModule.sendKeystrokes(text);
+      await HIDKeyboardModule.sendKeystrokes(appendEnter ? text + '\n' : text);
       setBcSendStatus('ok');
     } catch (e) {
       setBcSendStatus('error');
@@ -333,7 +351,7 @@ export default function App() {
     setSentText(text);
     clearTimeout(sendStatusTimer.current);
     try {
-      await HIDKeyboardModule.sendKeystrokes(text);
+      await HIDKeyboardModule.sendKeystrokes(appendEnter ? text + '\n' : text);
       setSendStatus('ok');
     } catch (e) {
       setSendStatus('error');
@@ -381,7 +399,40 @@ export default function App() {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar style="auto" />
-      <Text style={styles.title}>NFC Keyboard</Text>
+
+      {/* ── Settings modal ── */}
+      <Modal visible={showSettings} animationType="slide" transparent={true} onRequestClose={() => setShowSettings(false)}>
+        <View style={styles.settingsOverlay}>
+          <View style={styles.settingsPanel}>
+            <View style={styles.settingsHeader}>
+              <Text style={styles.settingsPanelTitle}>Settings</Text>
+              <TouchableOpacity onPress={() => setShowSettings(false)} style={styles.settingsCloseBtn}>
+                <Text style={styles.settingsCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.settingRow}>
+              <View style={styles.settingInfo}>
+                <Text style={styles.settingLabel}>Append Enter after scan</Text>
+                <Text style={styles.settingDesc}>Sends Enter automatically after the scanned text</Text>
+              </View>
+              <Switch
+                value={appendEnter}
+                onValueChange={toggleAppendEnter}
+                trackColor={{ false: '#ccc', true: '#1565c0' }}
+                thumbColor="#fff"
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <View style={styles.headerRow}>
+        <Text style={styles.title}>NFC Keyboard</Text>
+        <TouchableOpacity style={styles.settingsIconBtn} onPress={() => setShowSettings(true)}>
+          <Text style={styles.settingsIcon}>⚙</Text>
+        </TouchableOpacity>
+      </View>
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
 
@@ -420,9 +471,9 @@ export default function App() {
             <View>
               <View style={styles.disconnectedRow}>
                 <View style={[styles.dot, styles.dotOff]} />
-                <Text style={styles.mutedText}>Desconectado</Text>
+                <Text style={styles.mutedText}>Disconnected</Text>
                 <TouchableOpacity style={styles.smallBtn} onPress={loadPairedDevices}>
-                  <Text style={styles.smallBtnText}>Ver dispositivos</Text>
+                  <Text style={styles.smallBtnText}>View devices</Text>
                 </TouchableOpacity>
               </View>
               {reconnectFailed && (
@@ -430,7 +481,7 @@ export default function App() {
                   style={[styles.smallBtn, { marginTop: 8, alignSelf: 'flex-start', backgroundColor: '#fff3e0' }]}
                   onPress={forceReconnect}
                 >
-                  <Text style={[styles.smallBtnText, { color: '#e65100' }]}>Forzar reconexión</Text>
+                  <Text style={[styles.smallBtnText, { color: '#e65100' }]}>Force reconnect</Text>
                 </TouchableOpacity>
               )}
               {btError ? <Text style={[styles.errorText, { marginTop: 6 }]}>{btError}</Text> : null}
@@ -598,9 +649,9 @@ export default function App() {
           />
           <View style={styles.scannerOverlay}>
             <View style={styles.scannerFrame} />
-            <Text style={styles.scannerHint}>Apuntá la cámara al código</Text>
+            <Text style={styles.scannerHint}>Point camera at the code</Text>
             <TouchableOpacity style={styles.scannerCancelBtn} onPress={() => setBcScanning(false)}>
-              <Text style={styles.scannerCancelText}>Cancelar</Text>
+              <Text style={styles.scannerCancelText}>Cancel</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -631,7 +682,22 @@ export default function App() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f0f2f5', alignItems: 'stretch', paddingHorizontal: 16, paddingBottom: 20 },
-  title: { fontSize: 26, fontWeight: '700', color: '#111', textAlign: 'center', marginTop: 20, marginBottom: 16 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', marginTop: 20, marginBottom: 16 },
+  title: { flex: 1, fontSize: 26, fontWeight: '700', color: '#111', textAlign: 'center' },
+  settingsIconBtn: { position: 'absolute', right: 0, padding: 8 },
+  settingsIcon: { fontSize: 22, color: '#555' },
+
+  // Settings modal
+  settingsOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  settingsPanel: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 20, paddingBottom: 40 },
+  settingsHeader: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#eee', marginBottom: 8 },
+  settingsPanelTitle: { flex: 1, fontSize: 17, fontWeight: '700', color: '#111' },
+  settingsCloseBtn: { padding: 4 },
+  settingsCloseText: { fontSize: 18, color: '#888' },
+  settingRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
+  settingInfo: { flex: 1, marginRight: 12 },
+  settingLabel: { fontSize: 15, fontWeight: '600', color: '#111' },
+  settingDesc: { fontSize: 12, color: '#888', marginTop: 2 },
   initText: { fontSize: 16, color: '#666', textAlign: 'center', marginTop: 12 },
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: 8 },
