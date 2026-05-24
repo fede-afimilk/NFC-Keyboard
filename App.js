@@ -13,6 +13,7 @@ import {
   ActivityIndicator,
   Modal,
   Switch,
+  TextInput,
 } from 'react-native';
 import NfcManager, { NfcTech } from 'react-native-nfc-manager';
 import { BarCodeScanner } from 'expo-barcode-scanner';
@@ -120,6 +121,10 @@ export default function App() {
   // Settings
   const [showSettings, setShowSettings] = useState(false);
   const [appendEnter, setAppendEnter] = useState(false);
+  const [charSubstitutions, setCharSubstitutions] = useState([]);
+  const [newSubFrom, setNewSubFrom] = useState('');
+  const [newSubTo, setNewSubTo] = useState('');
+  const [showAddSub, setShowAddSub] = useState(false);
 
   // Barcode / QR
   const [bcScanning, setBcScanning] = useState(false);
@@ -144,6 +149,9 @@ export default function App() {
       HIDKeyboardModule.getPreference('appendEnter')
         .then(v => { if (v === 'true') setAppendEnter(true); })
         .catch(() => {});
+      HIDKeyboardModule.getPreference('charSubstitutions')
+        .then(v => { if (v) setCharSubstitutions(JSON.parse(v)); })
+        .catch(() => {});
     }
 
     return () => {
@@ -156,6 +164,20 @@ export default function App() {
     if (HIDKeyboardModule?.setPreference) {
       HIDKeyboardModule.setPreference('appendEnter', String(value)).catch(() => {});
     }
+  }
+
+  function saveSubstitutions(rules) {
+    setCharSubstitutions(rules);
+    if (HIDKeyboardModule?.setPreference) {
+      HIDKeyboardModule.setPreference('charSubstitutions', JSON.stringify(rules)).catch(() => {});
+    }
+  }
+
+  function applySubstitutions(text) {
+    return charSubstitutions.reduce(
+      (t, rule) => (rule.from ? t.split(rule.from).join(rule.to) : t),
+      text
+    );
   }
 
   async function initBluetooth() {
@@ -292,11 +314,12 @@ export default function App() {
   }
 
   async function sendBarcodeText(text) {
+    const final = applySubstitutions(text);
     setBcSendStatus('sending');
-    setBcSentText(text);
+    setBcSentText(final);
     clearTimeout(bcSendStatusTimer.current);
     try {
-      await HIDKeyboardModule.sendKeystrokes(appendEnter ? text + '\n' : text);
+      await HIDKeyboardModule.sendKeystrokes(appendEnter ? final + '\n' : final);
       setBcSendStatus('ok');
     } catch (e) {
       setBcSendStatus('error');
@@ -347,11 +370,12 @@ export default function App() {
   }
 
   async function sendText(text) {
+    const final = applySubstitutions(text);
     setSendStatus('sending');
-    setSentText(text);
+    setSentText(final);
     clearTimeout(sendStatusTimer.current);
     try {
-      await HIDKeyboardModule.sendKeystrokes(appendEnter ? text + '\n' : text);
+      await HIDKeyboardModule.sendKeystrokes(appendEnter ? final + '\n' : final);
       setSendStatus('ok');
     } catch (e) {
       setSendStatus('error');
@@ -410,6 +434,7 @@ export default function App() {
                 <Text style={styles.settingsCloseText}>✕</Text>
               </TouchableOpacity>
             </View>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
 
             <View style={styles.settingRow}>
               <View style={styles.settingInfo}>
@@ -423,6 +448,80 @@ export default function App() {
                 thumbColor="#fff"
               />
             </View>
+
+            {/* Character substitutions */}
+            <View style={styles.subSection}>
+              <Text style={styles.subSectionTitle}>Character substitutions</Text>
+              <Text style={styles.subSectionDesc}>Replace text in scanned output before sending</Text>
+            </View>
+
+            {charSubstitutions.length === 0 && !showAddSub && (
+              <Text style={styles.subEmpty}>No substitutions defined</Text>
+            )}
+
+            {charSubstitutions.map((rule, i) => (
+              <View key={i} style={styles.subRuleRow}>
+                <Text style={styles.subRuleFrom}>"{rule.from}"</Text>
+                <Text style={styles.subRuleArrow}> → </Text>
+                <Text style={styles.subRuleTo}>"{rule.to}"</Text>
+                <TouchableOpacity
+                  style={styles.subDeleteBtn}
+                  onPress={() => saveSubstitutions(charSubstitutions.filter((_, j) => j !== i))}
+                >
+                  <Text style={styles.subDeleteText}>✕</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+
+            {showAddSub ? (
+              <View style={styles.subAddForm}>
+                <View style={styles.subAddRow}>
+                  <TextInput
+                    style={styles.subInput}
+                    placeholder="Replace"
+                    value={newSubFrom}
+                    onChangeText={setNewSubFrom}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  <Text style={styles.subArrow}>→</Text>
+                  <TextInput
+                    style={styles.subInput}
+                    placeholder="With (empty = delete)"
+                    value={newSubTo}
+                    onChangeText={setNewSubTo}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                </View>
+                <View style={styles.subAddBtns}>
+                  <TouchableOpacity
+                    style={[styles.subBtn, !newSubFrom && styles.subBtnDisabled]}
+                    disabled={!newSubFrom}
+                    onPress={() => {
+                      if (!newSubFrom) return;
+                      saveSubstitutions([...charSubstitutions, { from: newSubFrom, to: newSubTo }]);
+                      setNewSubFrom('');
+                      setNewSubTo('');
+                      setShowAddSub(false);
+                    }}
+                  >
+                    <Text style={styles.subBtnText}>Add</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.subBtn, styles.subBtnSecondary]}
+                    onPress={() => { setShowAddSub(false); setNewSubFrom(''); setNewSubTo(''); }}
+                  >
+                    <Text style={styles.subBtnSecondaryText}>Cancel</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <TouchableOpacity style={styles.subAddTrigger} onPress={() => setShowAddSub(true)}>
+                <Text style={styles.subAddTriggerText}>+ Add substitution</Text>
+              </TouchableOpacity>
+            )}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -689,7 +788,7 @@ const styles = StyleSheet.create({
 
   // Settings modal
   settingsOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  settingsPanel: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 20, paddingBottom: 40 },
+  settingsPanel: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 20, paddingBottom: 40, maxHeight: '80%' },
   settingsHeader: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#eee', marginBottom: 8 },
   settingsPanelTitle: { flex: 1, fontSize: 17, fontWeight: '700', color: '#111' },
   settingsCloseBtn: { padding: 4 },
@@ -698,6 +797,30 @@ const styles = StyleSheet.create({
   settingInfo: { flex: 1, marginRight: 12 },
   settingLabel: { fontSize: 15, fontWeight: '600', color: '#111' },
   settingDesc: { fontSize: 12, color: '#888', marginTop: 2 },
+
+  // Character substitutions
+  subSection: { paddingTop: 18, paddingBottom: 6 },
+  subSectionTitle: { fontSize: 13, fontWeight: '700', color: '#444' },
+  subSectionDesc: { fontSize: 11, color: '#aaa', marginTop: 2 },
+  subEmpty: { fontSize: 12, color: '#bbb', fontStyle: 'italic', paddingVertical: 8 },
+  subRuleRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f5f5f5' },
+  subRuleFrom: { fontSize: 14, color: '#c62828', fontFamily: 'monospace', fontWeight: '600' },
+  subRuleArrow: { fontSize: 14, color: '#888', marginHorizontal: 2 },
+  subRuleTo: { fontSize: 14, color: '#2e7d32', fontFamily: 'monospace', fontWeight: '600', flex: 1 },
+  subDeleteBtn: { padding: 6 },
+  subDeleteText: { fontSize: 15, color: '#ccc' },
+  subAddForm: { paddingTop: 10 },
+  subAddRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
+  subInput: { flex: 1, borderWidth: 1, borderColor: '#ddd', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, fontSize: 14, fontFamily: 'monospace', backgroundColor: '#fafafa' },
+  subArrow: { fontSize: 18, color: '#888' },
+  subAddBtns: { flexDirection: 'row', gap: 8 },
+  subBtn: { flex: 1, backgroundColor: '#1565c0', borderRadius: 8, paddingVertical: 10, alignItems: 'center' },
+  subBtnDisabled: { backgroundColor: '#c5cae9' },
+  subBtnText: { color: '#fff', fontWeight: '600', fontSize: 14 },
+  subBtnSecondary: { backgroundColor: '#f5f5f5' },
+  subBtnSecondaryText: { color: '#555', fontWeight: '600', fontSize: 14 },
+  subAddTrigger: { marginTop: 10, paddingVertical: 12, alignItems: 'center', borderRadius: 8, borderWidth: 1, borderColor: '#e0e0e0', borderStyle: 'dashed' },
+  subAddTriggerText: { fontSize: 13, color: '#1565c0', fontWeight: '600' },
   initText: { fontSize: 16, color: '#666', textAlign: 'center', marginTop: 12 },
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: 8 },
