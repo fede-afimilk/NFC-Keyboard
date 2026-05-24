@@ -125,6 +125,7 @@ export default function App() {
   const [newSubFrom, setNewSubFrom] = useState('');
   const [newSubTo, setNewSubTo] = useState('');
   const [showAddSub, setShowAddSub] = useState(false);
+  const [scanLine, setScanLine] = useState('all'); // 'all' | '1' | '2' | '3'
 
   // Barcode / QR
   const [bcScanning, setBcScanning] = useState(false);
@@ -152,6 +153,9 @@ export default function App() {
       HIDKeyboardModule.getPreference('charSubstitutions')
         .then(v => { if (v) setCharSubstitutions(JSON.parse(v)); })
         .catch(() => {});
+      HIDKeyboardModule.getPreference('scanLine')
+        .then(v => { if (v) setScanLine(v); })
+        .catch(() => {});
     }
 
     return () => {
@@ -173,11 +177,29 @@ export default function App() {
     }
   }
 
+  function applyLineFilter(text) {
+    if (scanLine === 'all') return text;
+    const lines = text.split('\n');
+    const idx = parseInt(scanLine, 10) - 1;
+    return lines[idx] ?? '';
+  }
+
   function applySubstitutions(text) {
     return charSubstitutions.reduce(
       (t, rule) => (rule.from ? t.split(rule.from).join(rule.to) : t),
       text
     );
+  }
+
+  function prepareText(text) {
+    return applySubstitutions(applyLineFilter(text));
+  }
+
+  function toggleScanLine(value) {
+    setScanLine(value);
+    if (HIDKeyboardModule?.setPreference) {
+      HIDKeyboardModule.setPreference('scanLine', value).catch(() => {});
+    }
   }
 
   async function initBluetooth() {
@@ -314,7 +336,7 @@ export default function App() {
   }
 
   async function sendBarcodeText(text) {
-    const final = applySubstitutions(text);
+    const final = prepareText(text);
     setBcSendStatus('sending');
     setBcSentText(final);
     clearTimeout(bcSendStatusTimer.current);
@@ -370,7 +392,7 @@ export default function App() {
   }
 
   async function sendText(text) {
-    const final = applySubstitutions(text);
+    const final = prepareText(text);
     setSendStatus('sending');
     setSentText(final);
     clearTimeout(sendStatusTimer.current);
@@ -447,6 +469,27 @@ export default function App() {
                 trackColor={{ false: '#ccc', true: '#1565c0' }}
                 thumbColor="#fff"
               />
+            </View>
+
+            {/* Send line selector */}
+            <View style={styles.settingRow}>
+              <View style={styles.settingInfo}>
+                <Text style={styles.settingLabel}>Send line</Text>
+                <Text style={styles.settingDesc}>Which line of the scanned text to send</Text>
+              </View>
+              <View style={styles.linePickerRow}>
+                {['all', '1', '2', '3'].map(opt => (
+                  <TouchableOpacity
+                    key={opt}
+                    style={[styles.lineChip, scanLine === opt && styles.lineChipActive]}
+                    onPress={() => toggleScanLine(opt)}
+                  >
+                    <Text style={[styles.lineChipText, scanLine === opt && styles.lineChipTextActive]}>
+                      {opt === 'all' ? 'All' : opt}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
 
             {/* Character substitutions */}
@@ -797,6 +840,13 @@ const styles = StyleSheet.create({
   settingInfo: { flex: 1, marginRight: 12 },
   settingLabel: { fontSize: 15, fontWeight: '600', color: '#111' },
   settingDesc: { fontSize: 12, color: '#888', marginTop: 2 },
+
+  // Line picker
+  linePickerRow: { flexDirection: 'row', gap: 6 },
+  lineChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1, borderColor: '#ddd', backgroundColor: '#f5f5f5' },
+  lineChipActive: { backgroundColor: '#1565c0', borderColor: '#1565c0' },
+  lineChipText: { fontSize: 13, fontWeight: '600', color: '#555' },
+  lineChipTextActive: { color: '#fff' },
 
   // Character substitutions
   subSection: { paddingTop: 18, paddingBottom: 6 },
