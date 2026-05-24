@@ -1,0 +1,21 @@
+node_modules
+.expo
+.expo-shared
+web-build
+npm-debug.log
+yarn-error.log
+
+# Android build artifacts (keep source files)
+android/.gradle
+android/app/build
+android/build
+android/.idea
+android/local.properties
+android/app/debug.keystore
+android/**/*.class
+android/**/*.dex
+android/**/*.apk
+android/**/*.aab
+
+# iOS (not used in this project)
+ios
