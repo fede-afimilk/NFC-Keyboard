@@ -11,8 +11,10 @@ import {
   PermissionsAndroid,
   Platform,
   ActivityIndicator,
+  Modal,
 } from 'react-native';
 import NfcManager, { NfcTech } from 'react-native-nfc-manager';
+import { BarCodeScanner } from 'expo-barcode-scanner';
 import { StatusBar } from 'expo-status-bar';
 
 const { HIDKeyboardModule } = NativeModules;
@@ -107,12 +109,21 @@ export default function App() {
   // Discoverable
   const [discoverableError, setDiscoverableError] = useState('');
 
-  // Send status
+  // Send status (NFC)
   const [sendStatus, setSendStatus] = useState(null); // null | 'sending' | 'ok' | 'error'
   const [sentText, setSentText] = useState('');
   const [reconnectFailed, setReconnectFailed] = useState(false);
 
   const sendStatusTimer = useRef(null);
+
+  // Barcode / QR
+  const [bcScanning, setBcScanning] = useState(false);
+  const [bcData, setBcData] = useState(null);
+  const [bcError, setBcError] = useState('');
+  const [bcSendStatus, setBcSendStatus] = useState(null);
+  const [bcSentText, setBcSentText] = useState('');
+  const bcScannedRef = useRef(false);
+  const bcSendStatusTimer = useRef(null);
 
   // ── Init ────────────────────────────────────────────────────────────────────
 
@@ -236,6 +247,50 @@ export default function App() {
     }
   }
 
+  // ── Barcode / QR scan ────────────────────────────────────────────────────────
+
+  async function startBarcodeSccan() {
+    setBcData(null);
+    setBcError('');
+    setBcSendStatus(null);
+    setBcSentText('');
+    const { status } = await BarCodeScanner.requestPermissionsAsync();
+    if (status !== 'granted') {
+      setBcError('Permiso de cámara denegado. Habilitalo en Configuración.');
+      return;
+    }
+    bcScannedRef.current = false;
+    setBcScanning(true);
+  }
+
+  async function handleBarCodeScanned({ type, data }) {
+    if (bcScannedRef.current) return;
+    bcScannedRef.current = true;
+    setBcScanning(false);
+    setBcData({ type, data });
+    if (btConnected && HIDKeyboardModule) {
+      await sendBarcodeText(data);
+    }
+  }
+
+  async function sendBarcodeText(text) {
+    setBcSendStatus('sending');
+    setBcSentText(text);
+    clearTimeout(bcSendStatusTimer.current);
+    try {
+      await HIDKeyboardModule.sendKeystrokes(text);
+      setBcSendStatus('ok');
+    } catch (e) {
+      setBcSendStatus('error');
+    }
+    bcSendStatusTimer.current = setTimeout(() => setBcSendStatus(null), 4000);
+  }
+
+  async function sendBarcodeManually() {
+    if (!bcData || !btConnected) return;
+    await sendBarcodeText(bcData.data);
+  }
+
   // ── NFC scan ─────────────────────────────────────────────────────────────────
 
   async function startScan() {
@@ -297,12 +352,16 @@ export default function App() {
     setNfcState(NFC_STATE.IDLE);
   };
 
-  const reset = () => {
+  const resetAll = () => {
     setTag(null);
     setNfcError('');
     setSendStatus(null);
     setSentText('');
     setNfcState(NFC_STATE.IDLE);
+    setBcData(null);
+    setBcError('');
+    setBcSendStatus(null);
+    setBcSentText('');
   };
 
   // ── Render ────────────────────────────────────────────────────────────────────
@@ -416,6 +475,48 @@ export default function App() {
           )}
         </View>
 
+        {/* ── Barcode / QR Section ── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Barcode / QR</Text>
+
+          {bcError ? <Text style={styles.errorText}>{bcError}</Text> : null}
+
+          {bcData && (
+            <View style={styles.tagBox}>
+              <View style={styles.record}>
+                <Text style={styles.recordKind}>{String(bcData.type).split('.').pop()}</Text>
+                <Text style={styles.recordValue}>{bcData.data}</Text>
+              </View>
+
+              {bcSendStatus === 'sending' && (
+                <View style={styles.sendRow}>
+                  <ActivityIndicator size="small" color="#1565c0" />
+                  <Text style={styles.sendingText}>Sending...</Text>
+                </View>
+              )}
+              {bcSendStatus === 'ok' && (
+                <View style={[styles.sendRow, styles.sendOk]}>
+                  <Text style={styles.sendOkText}>✓ Sent: "{bcSentText.length > 30 ? bcSentText.slice(0, 30) + '…' : bcSentText}"</Text>
+                </View>
+              )}
+              {bcSendStatus === 'error' && (
+                <View style={[styles.sendRow, styles.sendErr]}>
+                  <Text style={styles.sendErrText}>Send error</Text>
+                </View>
+              )}
+
+              {btConnected && bcSendStatus === null && (
+                <TouchableOpacity style={styles.sendBtn} onPress={sendBarcodeManually}>
+                  <Text style={styles.sendBtnText}>Send "{bcData.data.length > 30 ? bcData.data.slice(0, 30) + '…' : bcData.data}"</Text>
+                </TouchableOpacity>
+              )}
+              {!btConnected && (
+                <Text style={[styles.hint, { marginTop: 8 }]}>Connect Bluetooth to send to PC</Text>
+              )}
+            </View>
+          )}
+        </View>
+
         {/* ── NFC Section ── */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>NFC</Text>
@@ -488,21 +589,41 @@ export default function App() {
         </View>
       </ScrollView>
 
-      {/* ── Main action button ── */}
-      {nfcState !== NFC_STATE.UNSUPPORTED && (
-        nfcState === NFC_STATE.SCANNING ? (
-          <TouchableOpacity style={[styles.btn, styles.btnCancel]} onPress={cancelScan}>
-            <Text style={styles.btnText}>Cancel</Text>
+      {/* ── Barcode camera modal ── */}
+      <Modal visible={bcScanning} animationType="slide" onRequestClose={() => setBcScanning(false)}>
+        <View style={styles.scannerContainer}>
+          <BarCodeScanner
+            onBarCodeScanned={handleBarCodeScanned}
+            style={StyleSheet.absoluteFillObject}
+          />
+          <View style={styles.scannerOverlay}>
+            <View style={styles.scannerFrame} />
+            <Text style={styles.scannerHint}>Apuntá la cámara al código</Text>
+            <TouchableOpacity style={styles.scannerCancelBtn} onPress={() => setBcScanning(false)}>
+              <Text style={styles.scannerCancelText}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Bottom action buttons ── */}
+      {nfcState === NFC_STATE.SCANNING ? (
+        <TouchableOpacity style={[styles.btn, styles.btnCancel]} onPress={cancelScan}>
+          <Text style={styles.btnText}>Cancel</Text>
+        </TouchableOpacity>
+      ) : (nfcState === NFC_STATE.SUCCESS || bcData) ? (
+        <TouchableOpacity style={styles.btn} onPress={resetAll}>
+          <Text style={styles.btnText}>Scan again</Text>
+        </TouchableOpacity>
+      ) : (
+        <View style={styles.btnRow}>
+          <TouchableOpacity style={[styles.btn, styles.btnHalf]} onPress={startScan} disabled={nfcState === NFC_STATE.UNSUPPORTED}>
+            <Text style={styles.btnText}>Scan NFC</Text>
           </TouchableOpacity>
-        ) : nfcState === NFC_STATE.SUCCESS ? (
-          <TouchableOpacity style={styles.btn} onPress={reset}>
-            <Text style={styles.btnText}>Scan another</Text>
+          <TouchableOpacity style={[styles.btn, styles.btnHalf, styles.btnBarcode]} onPress={startBarcodeSccan}>
+            <Text style={styles.btnText}>Scan Barcode / QR</Text>
           </TouchableOpacity>
-        ) : (
-          <TouchableOpacity style={styles.btn} onPress={startScan}>
-            <Text style={styles.btnText}>Scan NFC Tag</Text>
-          </TouchableOpacity>
-        )
+        </View>
       )}
     </SafeAreaView>
   );
@@ -561,6 +682,17 @@ const styles = StyleSheet.create({
 
   // Main button
   btn: { backgroundColor: '#1565c0', borderRadius: 12, paddingVertical: 16, alignItems: 'center', marginTop: 8 },
+  btnRow: { flexDirection: 'row', gap: 10, marginTop: 8 },
+  btnHalf: { flex: 1 },
+  btnBarcode: { backgroundColor: '#2e7d32' },
   btnCancel: { backgroundColor: '#757575' },
   btnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+
+  // Barcode scanner modal
+  scannerContainer: { flex: 1, backgroundColor: '#000' },
+  scannerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'space-between', paddingVertical: 60 },
+  scannerFrame: { width: 240, height: 240, borderWidth: 2, borderColor: '#fff', borderRadius: 12, opacity: 0.7 },
+  scannerHint: { color: '#fff', fontSize: 15, fontWeight: '500', textAlign: 'center', backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 16, paddingVertical: 6, borderRadius: 8 },
+  scannerCancelBtn: { backgroundColor: '#fff', borderRadius: 12, paddingVertical: 14, paddingHorizontal: 48 },
+  scannerCancelText: { color: '#1a1a1a', fontWeight: '700', fontSize: 16 },
 });
