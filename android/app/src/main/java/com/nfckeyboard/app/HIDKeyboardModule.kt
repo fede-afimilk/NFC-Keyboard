@@ -26,7 +26,11 @@ class HIDKeyboardModule(reactContext: ReactApplicationContext) :
     private val executor: Executor = Executors.newSingleThreadExecutor()
 
     private var appRegistered = false
-    private var isManualDisconnect = false
+    private var pendingRegistration = false
+    // Persisted to survive app restarts — user's "disconnect" intent should not be forgotten
+    private var isManualDisconnect: Boolean
+        get() = prefs.getBoolean("manual_disconnect", false)
+        set(value) { prefs.edit().putBoolean("manual_disconnect", value).apply() }
     private var reconnectAttempts = 0
     private val MAX_RECONNECT_ATTEMPTS = 8
 
@@ -94,8 +98,17 @@ class HIDKeyboardModule(reactContext: ReactApplicationContext) :
                 val params = Arguments.createMap()
                 params.putBoolean("registered", registered)
                 sendEvent("HIDAppStatus", params)
-                // If app was unregistered unexpectedly (e.g. BT stack restart), re-register
-                if (!registered && bluetoothHidDevice != null) {
+                if (registered) {
+                    pendingRegistration = false
+                    // Auto-reconnect to last saved device (handles app restart scenario)
+                    if (!isManualDisconnect && connectedHost == null) {
+                        val savedMac = prefs.getString("saved_device_mac", null)
+                        if (savedMac != null) {
+                            mainHandler.postDelayed({ scheduleReconnect(savedMac) }, 1500)
+                        }
+                    }
+                } else if (!pendingRegistration && bluetoothHidDevice != null) {
+                    // Unexpected unregister — re-register
                     mainHandler.postDelayed({ tryRegisterApp() }, 1000)
                 }
             }
@@ -144,11 +157,7 @@ class HIDKeyboardModule(reactContext: ReactApplicationContext) :
             override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
                 if (profile == BluetoothProfile.HID_DEVICE) {
                     bluetoothHidDevice = proxy as BluetoothHidDevice
-                    // Unregister stale app before re-registering to avoid conflicts
-                    if (appRegistered) {
-                        try { bluetoothHidDevice?.unregisterApp() } catch (_: Exception) {}
-                        appRegistered = false
-                    }
+                    // tryRegisterApp always unregisters first, clearing any stale BT stack state
                     tryRegisterApp()
                 }
             }
@@ -167,14 +176,23 @@ class HIDKeyboardModule(reactContext: ReactApplicationContext) :
     private fun tryRegisterApp() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
         val hid = bluetoothHidDevice ?: return
-        val sdp = BluetoothHidDeviceAppSdpSettings(
-            "NFC Keyboard",
-            "NFC to BT Keyboard",
-            "NFC Keyboard App",
-            BluetoothHidDevice.SUBCLASS1_KEYBOARD,
-            KEYBOARD_DESCRIPTOR
-        )
-        hid.registerApp(sdp, null, null, executor, hidCallback!!)
+        // pendingRegistration suppresses the "unexpected unregister" re-registration loop
+        pendingRegistration = true
+        try { hid.unregisterApp() } catch (_: Exception) {}
+        // Delay lets the BT stack finish processing unregisterApp before we call registerApp.
+        // Without this, registerApp fails silently when a stale registration is still being torn down.
+        mainHandler.postDelayed({
+            val currentHid = bluetoothHidDevice ?: return@postDelayed
+            if (appRegistered) return@postDelayed  // already registered via callback, skip
+            val sdp = BluetoothHidDeviceAppSdpSettings(
+                "NFC Keyboard",
+                "NFC to BT Keyboard",
+                "NFC Keyboard App",
+                BluetoothHidDevice.SUBCLASS1_KEYBOARD,
+                KEYBOARD_DESCRIPTOR
+            )
+            currentHid.registerApp(sdp, null, null, executor, hidCallback!!)
+        }, 500)
     }
 
     override fun getName(): String = "HIDKeyboardModule"
@@ -229,10 +247,15 @@ class HIDKeyboardModule(reactContext: ReactApplicationContext) :
             promise.reject("NOT_READY", "HID service not initialized yet, try again in a moment")
             return
         }
+        if (!appRegistered) {
+            promise.reject("NOT_READY", "Bluetooth is initializing, please try again in a moment")
+            return
+        }
         try {
             val device = bluetoothAdapter?.getRemoteDevice(macAddress)
                 ?: run { promise.reject("NOT_FOUND", "Device not found"); return }
 
+            isManualDisconnect = false
             val ok = hid.connect(device)
             if (ok) {
                 prefs.edit()
@@ -279,25 +302,15 @@ class HIDKeyboardModule(reactContext: ReactApplicationContext) :
             promise.reject("UNSUPPORTED", "Android 9+ required")
             return
         }
-        val savedMac = prefs.getString("saved_device_mac", null)
-            ?: run { promise.reject("NO_DEVICE", "No saved device"); return }
+        if (prefs.getString("saved_device_mac", null) == null) {
+            promise.reject("NO_DEVICE", "No saved device"); return
+        }
         isManualDisconnect = false
         reconnectAttempts = 0
         autoReconnectHandler.removeCallbacksAndMessages(null)
-        // Re-register app to force fresh HID state, then connect
-        try {
-            if (appRegistered) {
-                bluetoothHidDevice?.unregisterApp()
-                appRegistered = false
-            }
-            mainHandler.postDelayed({
-                tryRegisterApp()
-                mainHandler.postDelayed({ scheduleReconnect(savedMac) }, 1500)
-            }, 500)
-            promise.resolve(true)
-        } catch (e: Exception) {
-            promise.reject("ERROR", e.message)
-        }
+        // Re-register forces fresh HID state; onAppStatusChanged(true) will trigger auto-reconnect
+        tryRegisterApp()
+        promise.resolve(true)
     }
 
     @SuppressLint("MissingPermission")
