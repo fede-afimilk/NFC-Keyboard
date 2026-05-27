@@ -12,6 +12,7 @@ android/build
 android/.idea
 android/local.properties
 android/app/debug.keystore
+android/app/nfc-keyboard-release.keystore
 android/**/*.class
 android/**/*.dex
 android/**/*.apk
@@ -19,3 +20,6 @@ android/**/*.aab
 
 # iOS (not used in this project)
 ios
+
+# Local Claude Code settings
+.claude/
