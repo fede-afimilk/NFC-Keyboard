@@ -26,7 +26,7 @@ Designed for warehouse/factory workflows where scanned codes need to feed into d
 - **Foreground service** — keeps the connection alive when the app is backgrounded
 - **Settings**:
   - Append Enter after each scan
-  - Line selector — send all lines or a specific line (1–3) from multi-line data
+  - Record selector — send all text or a specific NDEF record (1–3) from a multi-record tag
   - Character substitution rules — transform scanned text before sending (e.g., replace `,` with `\t`)
 
 ---
@@ -126,6 +126,7 @@ The APK will be at `android/app/build/outputs/apk/release/app-release.apk`.
 
 | Version | Summary |
 |---|---|
+| v1.6 | Send-record selector (NDEF record 1/2/3) replaces line selector |
 | v1.5 | Scan line selector in Settings |
 | v1.4 | Character substitution rules in Settings |
 | v1.3 | Fix BT reconnect failure after app restart |

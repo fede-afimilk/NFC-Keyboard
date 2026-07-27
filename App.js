@@ -29,44 +29,50 @@ function tagIdToHex(id) {
   return Array.from(id).map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(':');
 }
 
+function decodeRecord(record) {
+  try {
+    if (record.tnf === 1 && record.type) {
+      const typeChar = String.fromCharCode(...record.type);
+      if (typeChar === 'T' && record.payload?.length > 0) {
+        const langLen = record.payload[0] & 0x3f;
+        return { kind: 'Text', value: String.fromCharCode(...record.payload.slice(1 + langLen)) };
+      }
+      if (typeChar === 'U' && record.payload?.length > 0) {
+        const prefixes = ['', 'http://www.', 'https://www.', 'http://', 'https://', 'tel:', 'mailto:', 'ftp://anonymous:anonymous@', 'ftp://ftp.', 'ftps://', 'sftp://'];
+        const prefix = prefixes[record.payload[0]] || '';
+        return { kind: 'URI', value: prefix + String.fromCharCode(...record.payload.slice(1)) };
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
 function extractTextFromTag(tag) {
   if (!tag?.ndefMessage?.length) return null;
   for (const record of tag.ndefMessage) {
-    try {
-      if (record.tnf === 1 && record.type) {
-        const typeChar = String.fromCharCode(...record.type);
-        if (typeChar === 'T' && record.payload?.length > 0) {
-          const langLen = record.payload[0] & 0x3f;
-          return String.fromCharCode(...record.payload.slice(1 + langLen));
-        }
-        if (typeChar === 'U' && record.payload?.length > 0) {
-          const prefixes = ['', 'http://www.', 'https://www.', 'http://', 'https://', 'tel:', 'mailto:'];
-          const prefix = prefixes[record.payload[0]] || '';
-          return prefix + String.fromCharCode(...record.payload.slice(1));
-        }
-      }
-    } catch (_) {}
+    const decoded = decodeRecord(record);
+    if (decoded) return decoded.value;
   }
   return null;
+}
+
+function extractRecordText(tag, recordIndex) {
+  const record = tag?.ndefMessage?.[recordIndex];
+  if (!record) return null;
+  const decoded = decodeRecord(record);
+  return decoded ? decoded.value : null;
+}
+
+function selectTagText(tag, scanRecord) {
+  if (scanRecord === 'all') return extractTextFromTag(tag);
+  return extractRecordText(tag, parseInt(scanRecord, 10) - 1);
 }
 
 function decodeNdefRecords(tag) {
   if (!tag?.ndefMessage?.length) return [];
   return tag.ndefMessage.map((record, i) => {
-    try {
-      if (record.tnf === 1 && record.type) {
-        const typeChar = String.fromCharCode(...record.type);
-        if (typeChar === 'T' && record.payload?.length > 0) {
-          const langLen = record.payload[0] & 0x3f;
-          return { index: i, kind: 'Text', value: String.fromCharCode(...record.payload.slice(1 + langLen)) };
-        }
-        if (typeChar === 'U' && record.payload?.length > 0) {
-          const prefixes = ['', 'http://www.', 'https://www.', 'http://', 'https://', 'tel:', 'mailto:', 'ftp://anonymous:anonymous@', 'ftp://ftp.', 'ftps://', 'sftp://'];
-          const prefix = prefixes[record.payload[0]] || '';
-          return { index: i, kind: 'URI', value: prefix + String.fromCharCode(...record.payload.slice(1)) };
-        }
-      }
-    } catch (_) {}
+    const decoded = decodeRecord(record);
+    if (decoded) return { index: i, ...decoded };
     const hex = Array.from(record.payload || []).map(b => b.toString(16).padStart(2, '0')).join(' ').toUpperCase();
     return { index: i, kind: 'Raw', value: hex || '(empty)' };
   });
@@ -125,7 +131,7 @@ export default function App() {
   const [newSubFrom, setNewSubFrom] = useState('');
   const [newSubTo, setNewSubTo] = useState('');
   const [showAddSub, setShowAddSub] = useState(false);
-  const [scanLine, setScanLine] = useState('all'); // 'all' | '1' | '2' | '3'
+  const [scanRecord, setScanRecord] = useState('all'); // 'all' | '1' | '2' | '3' (NDEF record index)
 
   // Barcode / QR
   const [bcScanning, setBcScanning] = useState(false);
@@ -153,8 +159,8 @@ export default function App() {
       HIDKeyboardModule.getPreference('charSubstitutions')
         .then(v => { if (v) setCharSubstitutions(JSON.parse(v)); })
         .catch(() => {});
-      HIDKeyboardModule.getPreference('scanLine')
-        .then(v => { if (v) setScanLine(v); })
+      HIDKeyboardModule.getPreference('scanRecord')
+        .then(v => { if (v) setScanRecord(v); })
         .catch(() => {});
     }
 
@@ -177,13 +183,6 @@ export default function App() {
     }
   }
 
-  function applyLineFilter(text) {
-    if (scanLine === 'all') return text;
-    const lines = text.split('\n');
-    const idx = parseInt(scanLine, 10) - 1;
-    return lines[idx] ?? '';
-  }
-
   function applySubstitutions(text) {
     return charSubstitutions.reduce(
       (t, rule) => (rule.from ? t.split(rule.from).join(rule.to) : t),
@@ -192,13 +191,13 @@ export default function App() {
   }
 
   function prepareText(text) {
-    return applySubstitutions(applyLineFilter(text));
+    return applySubstitutions(text);
   }
 
-  function toggleScanLine(value) {
-    setScanLine(value);
+  function toggleScanRecord(value) {
+    setScanRecord(value);
     if (HIDKeyboardModule?.setPreference) {
-      HIDKeyboardModule.setPreference('scanLine', value).catch(() => {});
+      HIDKeyboardModule.setPreference('scanRecord', value).catch(() => {});
     }
   }
 
@@ -373,7 +372,7 @@ export default function App() {
 
       // Auto-send if BT connected
       if (btConnected && HIDKeyboardModule) {
-        const text = extractTextFromTag(detected);
+        const text = selectTagText(detected, scanRecord);
         if (text) {
           await sendText(text);
         }
@@ -407,7 +406,7 @@ export default function App() {
 
   async function sendManually() {
     if (!tag || !btConnected) return;
-    const text = extractTextFromTag(tag);
+    const text = selectTagText(tag, scanRecord);
     if (text) await sendText(text);
   }
 
@@ -440,7 +439,7 @@ export default function App() {
   }
 
   const tagRecords = decodeNdefRecords(tag);
-  const tagText = extractTextFromTag(tag);
+  const tagText = selectTagText(tag, scanRecord);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -471,20 +470,20 @@ export default function App() {
               />
             </View>
 
-            {/* Send line selector */}
+            {/* Send record selector */}
             <View style={styles.settingRow}>
               <View style={styles.settingInfo}>
-                <Text style={styles.settingLabel}>Send line</Text>
-                <Text style={styles.settingDesc}>Which line of the scanned text to send</Text>
+                <Text style={styles.settingLabel}>Send record</Text>
+                <Text style={styles.settingDesc}>Which NDEF record on the tag to send</Text>
               </View>
               <View style={styles.linePickerRow}>
                 {['all', '1', '2', '3'].map(opt => (
                   <TouchableOpacity
                     key={opt}
-                    style={[styles.lineChip, scanLine === opt && styles.lineChipActive]}
-                    onPress={() => toggleScanLine(opt)}
+                    style={[styles.lineChip, scanRecord === opt && styles.lineChipActive]}
+                    onPress={() => toggleScanRecord(opt)}
                   >
-                    <Text style={[styles.lineChipText, scanLine === opt && styles.lineChipTextActive]}>
+                    <Text style={[styles.lineChipText, scanRecord === opt && styles.lineChipTextActive]}>
                       {opt === 'all' ? 'All' : opt}
                     </Text>
                   </TouchableOpacity>
