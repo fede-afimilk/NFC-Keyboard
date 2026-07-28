@@ -20,6 +20,7 @@ Designed for warehouse/factory workflows where scanned codes need to feed into d
 ## Features
 
 - **NFC tag reading** — NDEF records (text and URI types), NfcA/B/F/V technologies
+- **NFC tag writing** — write up to 3 text records (1–3) to a tag from the Write tab
 - **Barcode & QR scanning** — camera-based, via Expo Barcode Scanner
 - **Bluetooth HID emulation** — acts as a keyboard on Android 9+ (API 28+)
 - **Auto-reconnect** — exponential backoff when the BT connection drops
@@ -126,6 +127,7 @@ The APK will be at `android/app/build/outputs/apk/release/app-release.apk`.
 
 | Version | Summary |
 |---|---|
+| v1.7 | Read/Write tabs — write up to 3 NDEF text records to a tag |
 | v1.6 | Send-record selector (NDEF record 1/2/3) replaces line selector |
 | v1.5 | Scan line selector in Settings |
 | v1.4 | Character substitution rules in Settings |

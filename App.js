@@ -15,7 +15,7 @@ import {
   Switch,
   TextInput,
 } from 'react-native';
-import NfcManager, { NfcTech } from 'react-native-nfc-manager';
+import NfcManager, { NfcTech, Ndef } from 'react-native-nfc-manager';
 import { BarCodeScanner } from 'expo-barcode-scanner';
 import { StatusBar } from 'expo-status-bar';
 
@@ -141,6 +141,15 @@ export default function App() {
   const [bcSentText, setBcSentText] = useState('');
   const bcScannedRef = useRef(false);
   const bcSendStatusTimer = useRef(null);
+
+  // Write tag
+  const [screenTab, setScreenTab] = useState('read'); // 'read' | 'write'
+  const [writeRecord1, setWriteRecord1] = useState('');
+  const [writeRecord2, setWriteRecord2] = useState('');
+  const [writeRecord3, setWriteRecord3] = useState('');
+  const [writeState, setWriteState] = useState('idle'); // 'idle' | 'writing' | 'success' | 'error'
+  const [writeError, setWriteError] = useState('');
+  const writeStatusTimer = useRef(null);
 
   // ── Init ────────────────────────────────────────────────────────────────────
 
@@ -415,6 +424,39 @@ export default function App() {
     setNfcState(NFC_STATE.IDLE);
   };
 
+  // ── NFC write ────────────────────────────────────────────────────────────────
+
+  async function writeTag() {
+    const texts = [writeRecord1, writeRecord2, writeRecord3].map(t => t.trim()).filter(Boolean);
+    if (texts.length === 0) return;
+    setWriteState('writing');
+    setWriteError('');
+    clearTimeout(writeStatusTimer.current);
+    try {
+      await NfcManager.requestTechnology(NfcTech.Ndef, { alertMessage: 'Hold NFC tag close to write' });
+      const bytes = Ndef.encodeMessage(texts.map(t => Ndef.textRecord(t)));
+      await NfcManager.ndefHandler.writeNdefMessage(bytes);
+      setWriteState('success');
+    } catch (e) {
+      const msg = e?.message ?? '';
+      if (msg === 'cancelled' || msg === 'UserCancel') {
+        setWriteState('idle');
+      } else {
+        setWriteError(msg || 'Could not write tag');
+        setWriteState('error');
+      }
+    } finally {
+      NfcManager.cancelTechnologyRequest().catch(() => {});
+    }
+    writeStatusTimer.current = setTimeout(() => setWriteState('idle'), 4000);
+  }
+
+  const cancelWrite = () => {
+    NfcManager.cancelTechnologyRequest().catch(() => {});
+    clearTimeout(writeStatusTimer.current);
+    setWriteState('idle');
+  };
+
   const resetAll = () => {
     setTag(null);
     setNfcError('');
@@ -575,6 +617,92 @@ export default function App() {
         </TouchableOpacity>
       </View>
 
+      <View style={styles.tabBar}>
+        <TouchableOpacity
+          style={[styles.tabBtn, screenTab === 'read' && styles.tabBtnActive]}
+          onPress={() => setScreenTab('read')}
+        >
+          <Text style={[styles.tabBtnText, screenTab === 'read' && styles.tabBtnTextActive]}>Read</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tabBtn, screenTab === 'write' && styles.tabBtnActive]}
+          onPress={() => setScreenTab('write')}
+        >
+          <Text style={[styles.tabBtnText, screenTab === 'write' && styles.tabBtnTextActive]}>Write</Text>
+        </TouchableOpacity>
+      </View>
+
+      {screenTab === 'write' ? (
+        <>
+          <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Write NDEF tag</Text>
+              <Text style={styles.hint}>Fill in one or more records, then tap "Write tag" and hold the tag close. Empty records are skipped.</Text>
+
+              <Text style={[styles.settingLabel, { marginTop: 14 }]}>Record 1</Text>
+              <TextInput
+                style={styles.writeInput}
+                placeholder="Text for record 1"
+                value={writeRecord1}
+                onChangeText={setWriteRecord1}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+
+              <Text style={[styles.settingLabel, { marginTop: 12 }]}>Record 2</Text>
+              <TextInput
+                style={styles.writeInput}
+                placeholder="Text for record 2 (optional)"
+                value={writeRecord2}
+                onChangeText={setWriteRecord2}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+
+              <Text style={[styles.settingLabel, { marginTop: 12 }]}>Record 3</Text>
+              <TextInput
+                style={styles.writeInput}
+                placeholder="Text for record 3 (optional)"
+                value={writeRecord3}
+                onChangeText={setWriteRecord3}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+
+              {writeState === 'writing' && (
+                <View style={[styles.scanningBox, { marginTop: 14 }]}>
+                  <Text style={styles.scanningText}>Hold NFC tag close...</Text>
+                </View>
+              )}
+              {writeState === 'success' && (
+                <View style={[styles.sendRow, styles.sendOk]}>
+                  <Text style={styles.sendOkText}>✓ Tag written</Text>
+                </View>
+              )}
+              {writeState === 'error' && (
+                <View style={[styles.sendRow, styles.sendErr]}>
+                  <Text style={styles.sendErrText}>{writeError || 'Write error'}</Text>
+                </View>
+              )}
+            </View>
+          </ScrollView>
+
+          {writeState === 'writing' ? (
+            <TouchableOpacity style={[styles.btn, styles.btnCancel]} onPress={cancelWrite}>
+              <Text style={styles.btnText}>Cancel</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={[styles.btn, ![writeRecord1, writeRecord2, writeRecord3].some(t => t.trim()) && styles.btnDisabled]}
+              onPress={writeTag}
+              disabled={![writeRecord1, writeRecord2, writeRecord3].some(t => t.trim())}
+            >
+              <Text style={styles.btnText}>Write tag</Text>
+            </TouchableOpacity>
+          )}
+        </>
+      ) : (
+      <>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
 
         {/* ── Bluetooth Section ── */}
@@ -817,6 +945,8 @@ export default function App() {
           </TouchableOpacity>
         </View>
       )}
+      </>
+      )}
     </SafeAreaView>
   );
 }
@@ -827,6 +957,13 @@ const styles = StyleSheet.create({
   title: { flex: 1, fontSize: 26, fontWeight: '700', color: '#111', textAlign: 'center' },
   settingsIconBtn: { position: 'absolute', right: 0, padding: 8 },
   settingsIcon: { fontSize: 22, color: '#555' },
+
+  // Read/Write tabs
+  tabBar: { flexDirection: 'row', backgroundColor: '#e8eaf0', borderRadius: 12, padding: 4, marginBottom: 16, gap: 4 },
+  tabBtn: { flex: 1, paddingVertical: 10, borderRadius: 9, alignItems: 'center' },
+  tabBtnActive: { backgroundColor: '#fff', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4, elevation: 1 },
+  tabBtnText: { fontSize: 14, fontWeight: '600', color: '#888' },
+  tabBtnTextActive: { color: '#1565c0' },
 
   // Settings modal
   settingsOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
@@ -861,6 +998,7 @@ const styles = StyleSheet.create({
   subAddForm: { paddingTop: 10 },
   subAddRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
   subInput: { flex: 1, borderWidth: 1, borderColor: '#ddd', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, fontSize: 14, fontFamily: 'monospace', backgroundColor: '#fafafa' },
+  writeInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, marginTop: 6, backgroundColor: '#fafafa' },
   subArrow: { fontSize: 18, color: '#888' },
   subAddBtns: { flexDirection: 'row', gap: 8 },
   subBtn: { flex: 1, backgroundColor: '#1565c0', borderRadius: 8, paddingVertical: 10, alignItems: 'center' },
@@ -920,6 +1058,7 @@ const styles = StyleSheet.create({
 
   // Main button
   btn: { backgroundColor: '#1565c0', borderRadius: 12, paddingVertical: 16, alignItems: 'center', marginTop: 8 },
+  btnDisabled: { backgroundColor: '#c5cae9' },
   btnRow: { flexDirection: 'row', gap: 10, marginTop: 8 },
   btnHalf: { flex: 1 },
   btnBarcode: { backgroundColor: '#2e7d32' },
